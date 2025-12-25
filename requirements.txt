@@ -1,0 +1,23 @@
+# Core dependencies
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Online/Streaming ML libraries
+river>=0.18.0
+capymoa>=0.3.0
+
+# Financial data
+yfinance>=0.2.0
+# pandas-ta>=0.3.0  # Optional: technical analysis library
+
+# Utilities
+tqdm>=4.65.0
+pytest>=7.4.0
+jupyter>=1.0.0
+notebook>=7.0.0
+
+# Additional ML tools
+scipy>=1.11.0

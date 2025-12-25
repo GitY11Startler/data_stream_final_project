@@ -1,0 +1,17 @@
+# Data Directory
+
+This directory is for storing datasets used in the project.
+
+## Recommended Datasets
+
+1. **Stock Market Data**: Download via yfinance or Yahoo Finance
+2. **Custom Financial Data**: Place CSV files here
+
+## Format
+
+CSV files should have columns:
+- Timestamp/Date
+- Open, High, Low, Close, Volume (OHLCV)
+- Additional features as needed
+
+Note: Large data files are excluded from git via .gitignore
