@@ -5,22 +5,148 @@ import pandas as pd
 import numpy as np
 from typing import Optional, List, Dict, Tuple
 from datetime import datetime, timedelta
+import os
+import hashlib
+import warnings
+
+
+# Cache directory for downloaded stock data
+CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data', 'cache')
+
+
+# Interval compatibility with yfinance
+INTERVAL_LIMITS = {
+    '1m': {'max_days': 7, 'name': '1 minute'},
+    '2m': {'max_days': 60, 'name': '2 minutes'},
+    '5m': {'max_days': 60, 'name': '5 minutes'},
+    '15m': {'max_days': 60, 'name': '15 minutes'},
+    '30m': {'max_days': 60, 'name': '30 minutes'},
+    '60m': {'max_days': 730, 'name': '60 minutes'},
+    '1h': {'max_days': 730, 'name': '1 hour'},
+    '1d': {'max_days': None, 'name': '1 day'},
+    '1wk': {'max_days': None, 'name': '1 week'},
+    '1mo': {'max_days': None, 'name': '1 month'},
+}
+
+
+# Pre-configured stock lists for experiments
+STOCK_LISTS = {
+    'tech': ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'META'],
+    'finance': ['JPM', 'BAC', 'GS', 'MS', 'C'],
+    'mixed': ['AAPL', 'JPM', 'TSLA', 'WMT', 'DIS'],
+    'popular': ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'META', 'NVDA', 'JPM', 'V', 'WMT']
+}
+
+
+def _create_cache_dir():
+    """Create cache directory if it doesn't exist."""
+    if not os.path.exists(CACHE_DIR):
+        os.makedirs(CACHE_DIR)
+
+
+def _get_cache_filename(symbol: str, start_date: str, end_date: str, interval: str) -> str:
+    """
+    Generate cache filename from parameters.
+    
+    Args:
+        symbol: Stock ticker
+        start_date: Start date
+        end_date: End date
+        interval: Time interval
+        
+    Returns:
+        Cache filename
+    """
+    # Create hash from parameters
+    params_str = f"{symbol}_{start_date}_{end_date}_{interval}"
+    cache_key = hashlib.md5(params_str.encode()).hexdigest()[:12]
+    
+    return f"{symbol}_{interval}_{cache_key}.csv"
+
+
+def validate_date_interval(start_date: str, end_date: str, interval: str) -> Tuple[bool, str]:
+    """
+    Validate if date range is compatible with interval.
+    
+    yfinance has limitations on historical data availability for smaller intervals.
+    
+    Args:
+        start_date: Start date (YYYY-MM-DD)
+        end_date: End date (YYYY-MM-DD)
+        interval: Time interval
+        
+    Returns:
+        Tuple of (is_valid, message)
+    """
+    if interval not in INTERVAL_LIMITS:
+        return False, f"Invalid interval '{interval}'. Valid intervals: {list(INTERVAL_LIMITS.keys())}"
+    
+    max_days = INTERVAL_LIMITS[interval]['max_days']
+    
+    if max_days is None:
+        return True, "Date range is valid"
+    
+    # Calculate date range
+    start = datetime.strptime(start_date, '%Y-%m-%d')
+    end = datetime.strptime(end_date, '%Y-%m-%d')
+    days_diff = (end - start).days
+    
+    if days_diff > max_days:
+        interval_name = INTERVAL_LIMITS[interval]['name']
+        return False, (
+            f"Date range ({days_diff} days) exceeds maximum for {interval_name} data ({max_days} days). "
+            f"For {interval}, use dates within the last {max_days} days."
+        )
+    
+    return True, "Date range is valid"
+
+
+def adjust_dates_for_interval(interval: str, end_date: Optional[str] = None) -> Tuple[str, str]:
+    """
+    Automatically adjust date range based on interval limitations.
+    
+    Args:
+        interval: Time interval
+        end_date: End date (None = today)
+        
+    Returns:
+        Tuple of (start_date, end_date) as strings
+    """
+    if end_date is None:
+        end = datetime.now()
+    else:
+        end = datetime.strptime(end_date, '%Y-%m-%d')
+    
+    max_days = INTERVAL_LIMITS.get(interval, {}).get('max_days')
+    
+    if max_days is None:
+        # No limit, use 1 year of data
+        start = end - timedelta(days=365)
+    else:
+        # Use maximum available range (minus 1 day for safety)
+        start = end - timedelta(days=max_days - 1)
+    
+    return start.strftime('%Y-%m-%d'), end.strftime('%Y-%m-%d')
 
 
 def load_stock_data(
     symbol: str,
     start_date: str,
     end_date: str,
-    interval: str = '1d'
+    interval: str = '1d',
+    use_cache: bool = True,
+    validate_dates: bool = True
 ) -> pd.DataFrame:
     """
-    Load stock data using yfinance.
+    Load stock data using yfinance with caching support.
     
     Args:
         symbol: Stock ticker symbol
         start_date: Start date (YYYY-MM-DD)
         end_date: End date (YYYY-MM-DD)
         interval: Data interval ('1m', '5m', '15m', '1h', '1d', etc.)
+        use_cache: Whether to use cached data
+        validate_dates: Whether to validate date/interval compatibility
         
     Returns:
         DataFrame with OHLCV data
@@ -29,6 +155,30 @@ def load_stock_data(
         import yfinance as yf
     except ImportError:
         raise ImportError("yfinance is required. Install with: pip install yfinance")
+    
+    # Validate date range if requested
+    if validate_dates:
+        is_valid, message = validate_date_interval(start_date, end_date, interval)
+        if not is_valid:
+            warnings.warn(message)
+            # Auto-adjust dates
+            start_date, end_date = adjust_dates_for_interval(interval, end_date)
+            warnings.warn(f"Auto-adjusted dates to: {start_date} to {end_date}")
+    
+    # Check cache if enabled
+    if use_cache:
+        _create_cache_dir()
+        cache_file = os.path.join(CACHE_DIR, _get_cache_filename(symbol, start_date, end_date, interval))
+        
+        if os.path.exists(cache_file):
+            # Load from cache
+            try:
+                df = pd.read_csv(cache_file, index_col=0)
+                df.index = pd.to_datetime(df.index)
+                if not df.empty:
+                    return df
+            except Exception as e:
+                warnings.warn(f"Failed to load cache: {e}. Re-downloading...")
     
     # Download data
     df = yf.download(
@@ -39,7 +189,141 @@ def load_stock_data(
         progress=False
     )
     
+    # Save to cache if enabled and data is not empty
+    if use_cache and not df.empty:
+        try:
+            cache_file = os.path.join(CACHE_DIR, _get_cache_filename(symbol, start_date, end_date, interval))
+            df.to_csv(cache_file)
+        except Exception as e:
+            warnings.warn(f"Failed to save cache: {e}")
+    
     return df
+
+
+def load_multiple_stocks(
+    symbols: List[str],
+    start_date: str,
+    end_date: str,
+    interval: str = '1d',
+    use_cache: bool = True
+) -> Dict[str, pd.DataFrame]:
+    """
+    Load data for multiple stocks.
+    
+    Args:
+        symbols: List of stock ticker symbols
+        start_date: Start date (YYYY-MM-DD)
+        end_date: End date (YYYY-MM-DD)
+        interval: Data interval
+        use_cache: Whether to use cached data
+        
+    Returns:
+        Dictionary mapping symbols to DataFrames
+    """
+    results = {}
+    
+    for symbol in symbols:
+        try:
+            df = load_stock_data(
+                symbol,
+                start_date,
+                end_date,
+                interval=interval,
+                use_cache=use_cache
+            )
+            
+            if not df.empty:
+                results[symbol] = df
+            else:
+                warnings.warn(f"No data retrieved for {symbol}")
+        
+        except Exception as e:
+            warnings.warn(f"Failed to load {symbol}: {e}")
+    
+    return results
+
+
+def load_stock_list(
+    list_name: str,
+    start_date: str,
+    end_date: str,
+    interval: str = '1d',
+    use_cache: bool = True
+) -> Dict[str, pd.DataFrame]:
+    """
+    Load data for a pre-configured stock list.
+    
+    Args:
+        list_name: Name of stock list ('tech', 'finance', 'mixed', 'popular')
+        start_date: Start date
+        end_date: End date
+        interval: Time interval
+        use_cache: Whether to use cached data
+        
+    Returns:
+        Dictionary mapping symbols to DataFrames
+    """
+    if list_name not in STOCK_LISTS:
+        raise ValueError(
+            f"Unknown stock list '{list_name}'. "
+            f"Available lists: {list(STOCK_LISTS.keys())}"
+        )
+    
+    symbols = STOCK_LISTS[list_name]
+    return load_multiple_stocks(symbols, start_date, end_date, interval, use_cache)
+
+
+def clear_cache(symbol: Optional[str] = None):
+    """
+    Clear cached stock data.
+    
+    Args:
+        symbol: Specific symbol to clear (None = clear all)
+    """
+    if not os.path.exists(CACHE_DIR):
+        return
+    
+    files_removed = 0
+    
+    for filename in os.listdir(CACHE_DIR):
+        if symbol is None or filename.startswith(f"{symbol}_"):
+            filepath = os.path.join(CACHE_DIR, filename)
+            try:
+                os.remove(filepath)
+                files_removed += 1
+            except Exception as e:
+                warnings.warn(f"Failed to remove {filename}: {e}")
+    
+    print(f"Removed {files_removed} cache file(s)")
+
+
+def get_cache_info() -> pd.DataFrame:
+    """
+    Get information about cached files.
+    
+    Returns:
+        DataFrame with cache information
+    """
+    if not os.path.exists(CACHE_DIR):
+        return pd.DataFrame()
+    
+    cache_info = []
+    
+    for filename in os.listdir(CACHE_DIR):
+        filepath = os.path.join(CACHE_DIR, filename)
+        
+        # Get file stats
+        stat = os.stat(filepath)
+        size_mb = stat.st_size / (1024 * 1024)
+        modified = datetime.fromtimestamp(stat.st_mtime)
+        
+        cache_info.append({
+            'filename': filename,
+            'size_mb': size_mb,
+            'modified': modified
+        })
+    
+    return pd.DataFrame(cache_info).sort_values('modified', ascending=False)
 
 
 def calculate_mid_price(df: pd.DataFrame) -> pd.Series:
