@@ -135,7 +135,7 @@ python -c "from src.data.stock_data import load_stock_data; print('✅ Data load
 | **capymoa** | >=0.3.0 | Streaming ML library |
 | yfinance | >=0.2.0 | Stock data download |
 | pytest | >=7.4.0 | Testing framework |
-| pytorch | >=2.0.0 | ML utilities |
+| pytorch | >=2.0.0 | ML/AI utilities |
 
 ### Troubleshooting
 
