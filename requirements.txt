@@ -21,3 +21,4 @@ notebook>=7.0.0
 
 # Additional ML tools
 scipy>=1.11.0
+torch>=2.0.0
